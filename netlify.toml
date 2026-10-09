@@ -1,0 +1,21 @@
+# Konfigurasi deploy Netlify untuk frontend SetRescue
+# Baca bagian ini otomatis saat import repo dari GitHub.
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+# Proksi semua request /api/* ke backend yang di-host di Render.
+# GANTI https://YOUR-BACKEND.onrender.com dengan URL backend asli kamu.
+[[redirects]]
+  from = "/api/*"
+  to = "https://YOUR-BACKEND.onrender.com/api/:splat"
+  status = 200
+  force = true
+
+# Fallback SPA (React Router): semua rute lain -> index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

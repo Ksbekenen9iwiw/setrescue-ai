@@ -1,0 +1,13 @@
+# Local dependencies and generated assets
+node_modules/
+frontend/dist/
+backend/.venv/
+backend/data/
+backend/tests/.test-data/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.tsbuildinfo
+# Never commit tokens and local encryption keys
+.env
+backend/.env
