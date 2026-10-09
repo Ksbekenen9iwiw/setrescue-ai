@@ -13,6 +13,7 @@ export function ReadinessSection() {
   const { activeProjectId, toast } = useApp()
   const [running, setRunning] = useState(false)
   const [workingId, setWorkingId] = useState<string | null>(null)
+  const [reviewing, setReviewing] = useState(false)
   const [preview, setPreview] = useState<PreventIssue | null>(null)
   const { data: run, loading, error, reload, setData: setRun } = useLoad(
     () => activeProjectId ? api<PreventRun | null>(`/projects/${activeProjectId}/prevent`) : Promise.reject(new Error('Select a project first.')),
@@ -35,6 +36,17 @@ export function ReadinessSection() {
       toast(`PREVENT completed: ${result.status.replace('_', ' ')} at ${result.overall_score.toFixed(1)}.`, result.status === 'READY' ? 'success' : 'info')
     } catch (caught) { toast(caught instanceof Error ? caught.message : 'PREVENT could not run.', 'error') }
     finally { setRunning(false) }
+  }
+
+  async function runAiReview() {
+    if (!activeProjectId) return
+    setReviewing(true)
+    try {
+      const result = await post<PreventRun>(`/projects/${activeProjectId}/prevent/ai-review`)
+      setRun(result)
+      toast('AI readiness review updated. Advisory only — the score stays deterministic.', 'success')
+    } catch (caught) { toast(caught instanceof Error ? caught.message : 'AI review failed.', 'error') }
+    finally { setReviewing(false) }
   }
 
   async function decide(requirement: Requirement, decision: 'CONFIRMED' | 'REJECTED', hard = false) {
@@ -81,6 +93,14 @@ export function ReadinessSection() {
           <Card className="category-chart-card"><div className="section-heading"><div><span>WEIGHTED CATEGORIES</span><h2>Readiness by discipline</h2></div><VerifiedLabel /></div><ResponsiveContainer width="100%" height={310}><BarChart data={chartData} layout="vertical" margin={{ left: 18, right: 24 }}><CartesianGrid horizontal={false} stroke="#eaecf0" /><XAxis type="number" domain={[0, 100]} tickLine={false} axisLine={false} /><YAxis dataKey="name" type="category" width={150} tickLine={false} axisLine={false} fontSize={10} /><Tooltip cursor={{ fill: '#f8fafc' }} /><Bar dataKey="score" fill="#ef5a3c" radius={[0, 5, 5, 0]} barSize={15} /></BarChart></ResponsiveContainer></Card>
           <Card className="blocker-card"><div className="section-heading"><div><span>BLOCKER LOGIC</span><h2>Why this status?</h2></div></div><div className="blocker-rules"><div className={run.status !== 'NOT_READY' ? 'pass' : 'fail'}>{run.status !== 'NOT_READY' ? <CheckCircle2 /> : <AlertOctagon />}<span><strong>No failed hard constraint</strong><small>Overrides numerical readiness</small></span></div><div className={!openIssues.some((issue) => issue.severity === 'CRITICAL') ? 'pass' : 'fail'}>{!openIssues.some((issue) => issue.severity === 'CRITICAL') ? <CheckCircle2 /> : <XCircle />}<span><strong>No open critical finding</strong><small>{openIssues.filter((issue) => issue.severity === 'CRITICAL').length} currently open</small></span></div><div className={!suggestions.length ? 'pass' : 'review'}>{!suggestions.length ? <CheckCircle2 /> : <Sparkles />}<span><strong>Suggestions reviewed</strong><small>{suggestions.length} need human confirmation</small></span></div><div className={run.overall_score >= 85 ? 'pass' : 'review'}>{run.overall_score >= 85 ? <CheckCircle2 /> : <ShieldCheck />}<span><strong>Score at least 85</strong><small>Current weighted score {run.overall_score.toFixed(1)}</small></span></div></div></Card>
         </div>
+
+        <Card className="blocker-card ai-review-card">
+          <div className="section-heading"><div><span>AI READINESS REVIEW</span><h2>Executive summary</h2></div><div className="page-actions"><Button variant="secondary" loading={reviewing} onClick={runAiReview}><Sparkles size={16} />{run.ai_summary ? 'Regenerate' : 'Generate AI summary'}</Button></div></div>
+          {!run.ai_summary ? <p className="ai-review-hint">Generate a plain-language briefing of the current findings. The narrative is advisory and never changes the deterministic score above.</p> : <><p className="ai-review-summary">{run.ai_summary.summary}</p>
+            {run.ai_summary.top_risks.length > 0 && <div className="ai-review-block"><span>Top risks</span><ul>{run.ai_summary.top_risks.map((risk, index) => <li key={index}><Badge tone={risk.severity === 'CRITICAL' ? 'danger' : risk.severity === 'WARNING' ? 'warning' : 'neutral'}>{risk.severity}</Badge><strong>{risk.title}</strong><p>{risk.detail}</p></li>)}</ul></div>}
+            {run.ai_summary.next_actions.length > 0 && <div className="ai-review-block"><span>Next actions</span><ol>{run.ai_summary.next_actions.map((action, index) => <li key={index}>{action}</li>)}</ol></div>}
+          </>}
+        </Card>
       </>}
 
       <div className="prevent-columns">

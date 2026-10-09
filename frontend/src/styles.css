@@ -289,6 +289,15 @@ input:focus, textarea:focus, select:focus { border-color: var(--coral); outline:
 .blocker-rules span { display:flex; flex-direction:column; gap:3px; }
 .blocker-rules strong { font-size:10px; }.blocker-rules small { font-size:8px; color:#7b8695; }
 .prevent-columns { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.ai-review-card { margin-top:18px; }
+.ai-review-summary { font-size:11px; line-height:1.65; color:#334155; margin-top:14px; }
+.ai-review-hint { font-size:9px; color:var(--muted); line-height:1.6; margin-top:14px; }
+.ai-review-block { margin-top:16px; }
+.ai-review-block > span { font-size:9px; font-weight:850; letter-spacing:.14em; color:var(--coral-dark); text-transform:uppercase; }
+.ai-review-block ul,.ai-review-block ol { margin-top:10px; padding-left:17px; display:flex; flex-direction:column; gap:8px; }
+.ai-review-block li { font-size:9px; color:var(--muted); line-height:1.5; }
+.ai-review-block li strong { font-size:10px; color:#15202d; display:block; margin-top:5px; }
+.ai-review-block li p { margin-top:3px; }
 .suggestion-list,.issue-list { display:flex; flex-direction:column; gap:10px; }
 .suggestion-card { padding:17px; border-left:3px solid var(--purple); background:linear-gradient(115deg,#fff 75%,#faf7ff); }
 .suggestion-top { display:flex; justify-content:space-between; align-items:center; }

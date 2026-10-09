@@ -28,7 +28,7 @@ from app.schemas import (
     NotificationSend, ProjectCreate, ProjectUpdate, RecoveryGenerate, RequirementCreate,
     RequirementDecision, ResourceCreate, SceneCreate, SceneUpdate, ShotCreate, WeatherManualCreate,
 )
-from app.services.ai import call_structured_analysis, test_connection
+from app.services.ai import call_readiness_review, call_structured_analysis, test_connection
 from app.services.demo import load_realistic_demo
 from app.services.documents import save_document
 from app.services.notifications import calculate_crew_impact, create_previews, send_notifications
@@ -93,8 +93,9 @@ def _schedule_payload(db: Session, schedule: Schedule) -> dict[str, Any]:
 
 
 def _prevent_payload(run: PreventRun) -> dict[str, Any]:
-    data = model_dict(run)
+    data = model_dict(run, exclude={"ai_summary_json"})
     data["category_scores"] = parse_json(run.category_scores_json, {})
+    data["ai_summary"] = parse_json(run.ai_summary_json, None)
     data["issues"] = [model_dict(issue) | {"proposed_patch": parse_json(issue.proposed_patch_json, None)} for issue in run.issues]
     return data
 
@@ -417,6 +418,38 @@ def execute_prevent(project_id: str, db: Session = Depends(get_db)) -> dict:
     run = run_prevent(db, project)
     run = db.scalar(select(PreventRun).where(PreventRun.id == run.id).options(selectinload(PreventRun.issues)))
     return success(_prevent_payload(run))
+
+
+@router.post("/projects/{project_id}/prevent/ai-review")
+def ai_readiness_review(project_id: str, db: Session = Depends(get_db)) -> dict:
+    project = project_or_404(db, project_id)
+    run = db.scalar(
+        select(PreventRun).where(PreventRun.project_id == project_id)
+        .order_by(PreventRun.started_at.desc()).options(selectinload(PreventRun.issues))
+    )
+    if not run:
+        raise AppError(409, "PREVENT_NOT_RUN", "Run the readiness check before requesting an AI review.")
+    findings = {
+        "project": project.name,
+        "status": run.status,
+        "overall_score": run.overall_score,
+        "category_scores": parse_json(run.category_scores_json, {}),
+        "findings": [
+            {"severity": issue.severity, "category": issue.category, "title": issue.title,
+             "description": issue.description, "recommended_action": issue.recommended_action, "source": issue.source}
+            for issue in run.issues if issue.status == "OPEN"
+        ],
+    }
+    input_text = json.dumps(findings, sort_keys=True, separators=(",", ":"))
+    review, cache_hit, tokens = call_readiness_review(
+        db, f"{project_id}:READINESS_REVIEW", input_text, {"project": project.name}
+    )
+    run.ai_summary_json = review.model_dump_json()
+    run.ai_used = True
+    run.token_usage = (run.token_usage or 0) + tokens
+    db.commit()
+    db.refresh(run)
+    return success(_prevent_payload(run) | {"cache_hit": cache_hit})
 
 
 @router.get("/projects/{project_id}/prevent/issues/{issue_id}/preview")

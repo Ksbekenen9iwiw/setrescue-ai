@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from app.core.errors import AppError
 from app.core.security import decrypt_secret, validate_external_https_url
 from app.models import AICache, AISetting, AIUsageLog
+
+EXTRACTION_SYSTEM_PROMPT = "You extract film-production readiness facts into strict JSON. Never schedule or calculate costs."
+READINESS_SYSTEM_PROMPT = "You write concise production-readiness briefings from structured findings. Never schedule or calculate costs."
 
 
 class DetectedRequirement(BaseModel):
@@ -42,11 +45,61 @@ class AIAnalysis(BaseModel):
     scenes: list[SceneAnalysis] = Field(default_factory=list, max_length=200)
 
 
+class ReadinessRisk(BaseModel):
+    severity: str = Field(pattern=r"^(CRITICAL|WARNING|INFO)$")
+    title: str = Field(min_length=1, max_length=200)
+    detail: str = Field(min_length=1, max_length=1000)
+
+
+class ReadinessReview(BaseModel):
+    summary: str = Field(min_length=1, max_length=2000)
+    top_risks: list[ReadinessRisk] = Field(default_factory=list, max_length=10)
+    next_actions: list[str] = Field(default_factory=list, max_length=10)
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def call_structured_analysis(db: Session, operation: str, input_text: str, context: dict[str, Any]) -> tuple[AIAnalysis, bool, int]:
+def _strip_code_fence(content: str) -> str:
+    text = content.strip()
+    if not text.startswith("```"):
+        return text
+    newline = text.find("\n")
+    if newline == -1:
+        return text
+    text = text[newline + 1:].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+    return text
+
+
+def _parse_json_content(model_cls: type[BaseModel], content: str) -> BaseModel:
+    # Some providers wrap JSON in a markdown code fence even when asked for raw JSON.
+    candidates = [content.strip(), _strip_code_fence(content)]
+    start, end = content.find("{"), content.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(content[start:end + 1])
+    last_error: ValidationError | None = None
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return model_cls.model_validate_json(candidate)
+        except ValidationError as exc:
+            last_error = exc
+    raise last_error if last_error is not None else AppError(502, "AI_INVALID_RESPONSE", "AI provider returned an empty response.")
+
+
+def _request_structured(
+    db: Session,
+    operation: str,
+    input_text: str,
+    context: dict[str, Any],
+    model_cls: type[BaseModel],
+    system_prompt: str,
+    build_prompt: Callable[[str, str], str],
+) -> tuple[Any, bool, int]:
     setting = db.scalar(select(AISetting).order_by(AISetting.updated_at.desc()))
     if not setting or not setting.enabled or not setting.encrypted_api_key:
         raise AppError(503, "AI_CONNECTION_FAILED", "AI provider is not configured.")
@@ -62,7 +115,7 @@ def call_structured_analysis(db: Session, operation: str, input_text: str, conte
     ))
     if cached:
         try:
-            parsed = AIAnalysis.model_validate_json(cached.response_json)
+            parsed = _parse_json_content(model_cls, cached.response_json)
         except ValidationError:
             db.delete(cached)
         else:
@@ -70,17 +123,11 @@ def call_structured_analysis(db: Session, operation: str, input_text: str, conte
             db.commit()
             return parsed, True, 0
 
-    prompt = (
-        "Analyze production documents. Return JSON only with the exact shape: "
-        '{"scenes":[{"scene_number":"...","detected_requirements":[{"category":"CAST|EQUIPMENT|LIGHTING|AUDIO|WEATHER|LOCATION|TIME|DEPENDENCY|QUALITY|CONTINGENCY","name":"...","source_reason":"...","confidence":0.0,"suggested_hard_constraint":false}],"issues":[{"severity":"CRITICAL|WARNING|INFO","category":"...","title":"...","description":"...","recommended_action":"...","confidence":0.0}]}]}. '
-        "Do not invent scene numbers. Suggestions are advisory and never authoritative.\n"
-        f"Known context: {context_json}\nDocuments:\n{input_text[:100_000]}"
-    )
     payload = {
         "model": setting.model,
         "messages": [
-            {"role": "system", "content": "You extract film-production readiness facts into strict JSON. Never schedule or calculate costs."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": build_prompt(context_json, input_text)},
         ],
         "temperature": 0,
         "response_format": {"type": "json_object"},
@@ -109,7 +156,7 @@ def call_structured_analysis(db: Session, operation: str, input_text: str, conte
     try:
         raw = response.json()
         content = raw["choices"][0]["message"]["content"]
-        parsed = AIAnalysis.model_validate_json(content)
+        parsed = _parse_json_content(model_cls, content)
         usage = raw.get("usage") or {}
         input_tokens = int(usage.get("prompt_tokens", 0))
         output_tokens = int(usage.get("completion_tokens", 0))
@@ -122,6 +169,33 @@ def call_structured_analysis(db: Session, operation: str, input_text: str, conte
     ))
     db.commit()
     return parsed, False, input_tokens + output_tokens
+
+
+def _extraction_prompt(context_json: str, input_text: str) -> str:
+    return (
+        "Analyze production documents. Return JSON only with the exact shape: "
+        '{"scenes":[{"scene_number":"...","detected_requirements":[{"category":"CAST|EQUIPMENT|LIGHTING|AUDIO|WEATHER|LOCATION|TIME|DEPENDENCY|QUALITY|CONTINGENCY","name":"...","source_reason":"...","confidence":0.0,"suggested_hard_constraint":false}],"issues":[{"severity":"CRITICAL|WARNING|INFO","category":"...","title":"...","description":"...","recommended_action":"...","confidence":0.0}]}]}. '
+        "Do not invent scene numbers. Suggestions are advisory and never authoritative.\n"
+        f"Known context: {context_json}\nDocuments:\n{input_text[:100_000]}"
+    )
+
+
+def call_structured_analysis(db: Session, operation: str, input_text: str, context: dict[str, Any]) -> tuple[AIAnalysis, bool, int]:
+    return _request_structured(db, operation, input_text, context, AIAnalysis, EXTRACTION_SYSTEM_PROMPT, _extraction_prompt)
+
+
+def _readiness_prompt(context_json: str, input_text: str) -> str:
+    return (
+        "Write a production-readiness briefing from the findings below. Return JSON only with the exact shape: "
+        '{"summary":"...","top_risks":[{"severity":"CRITICAL|WARNING|INFO","title":"...","detail":"..."}],"next_actions":["..."]}. '
+        "Be concise and factual. Only reference the provided findings; never invent scenes, requirements, or numbers. "
+        "The narrative is advisory and never overrides the deterministic readiness score.\n"
+        f"Known context: {context_json}\nReadiness findings:\n{input_text[:100_000]}"
+    )
+
+
+def call_readiness_review(db: Session, operation: str, input_text: str, context: dict[str, Any]) -> tuple[ReadinessReview, bool, int]:
+    return _request_structured(db, operation, input_text, context, ReadinessReview, READINESS_SYSTEM_PROMPT, _readiness_prompt)
 
 
 def test_connection(setting: AISetting) -> dict[str, Any]:

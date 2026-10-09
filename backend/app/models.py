@@ -157,6 +157,7 @@ class PreventRun(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ai_used: Mapped[bool] = mapped_column(Boolean, default=False)
     token_usage: Mapped[int] = mapped_column(Integer, default=0)
+    ai_summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     issues: Mapped[list[PreventIssue]] = relationship(back_populates="run", cascade="all, delete-orphan")
 
 

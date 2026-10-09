@@ -85,6 +85,18 @@ export type PreventIssue = {
   proposed_patch?: { action: string; scene_id: string } | null
 }
 
+export type ReadinessRisk = {
+  severity: 'CRITICAL' | 'WARNING' | 'INFO'
+  title: string
+  detail: string
+}
+
+export type ReadinessReview = {
+  summary: string
+  top_risks: ReadinessRisk[]
+  next_actions: string[]
+}
+
 export type PreventRun = {
   id: string
   overall_score: number
@@ -94,6 +106,7 @@ export type PreventRun = {
   token_usage: number
   category_scores: Record<string, number>
   issues: PreventIssue[]
+  ai_summary?: ReadinessReview | null
 }
 
 export type ScheduleItem = {
