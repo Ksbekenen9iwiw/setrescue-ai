@@ -20,6 +20,7 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
   const [approved, setApproved] = useState(false)
   const [detailPlan, setDetailPlan] = useState<RecoveryPlan | null>(null)
   const [confirmPlan, setConfirmPlan] = useState<RecoveryPlan | null>(null)
+  const [explaining, setExplaining] = useState(false)
   const { data: incidents, loading: loadingIncidents, error, reload: reloadIncidents } = useLoad(
     () => activeProjectId ? api<Incident[]>(`/projects/${activeProjectId}/incidents`) : Promise.reject(new Error('Select a project first.')),
     [activeProjectId],
@@ -55,6 +56,18 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
     finally { setGenerating(false) }
   }
 
+  async function explainAi() {
+    if (!selectedIncident) return
+    setExplaining(true)
+    try {
+      const result = await post<{ plans: RecoveryPlan[]; recommendation: string; cache_hit: boolean }>(`/incidents/${selectedIncident}/recovery/ai-explain`)
+      setPlans(result.plans)
+      toast(result.cache_hit ? 'AI explanations loaded from cache.' : 'AI trade-off explanations ready.', 'success')
+      await reloadPlans()
+    } catch (caught) { toast(caught instanceof Error ? caught.message : 'AI explanation failed.', 'error') }
+    finally { setExplaining(false) }
+  }
+
   async function approve(plan: RecoveryPlan) {
     setApproving(plan.id)
     try {
@@ -81,7 +94,7 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
       </Card>
 
       {!plans.length ? <div className="recovery-empty"><div className="solver-visual"><span className="node n1">Incident</span><i /><span className="node n2">Verified state</span><i /><span className="node n3">CP-SAT</span><div className="branches"><b>Fastest</b><b>Cheapest</b><b>Minimum change</b></div></div><h2>Ready to find the next shootable sequence</h2><p>Confirmed hard constraints, locked scenes, availability, current weather, setup and work hours will be enforced.</p><Button loading={generating} onClick={generate}>Run recovery solver</Button></div> : <>
-        <div className="comparison-heading"><div><span>PLAN COMPARISON</span><h2>Three valid objectives. One management decision.</h2></div><div className="comparison-key"><VerifiedLabel /><span>Numbers calculated internally</span></div></div>
+        <div className="comparison-heading"><div><span>PLAN COMPARISON</span><h2>Three valid objectives. One management decision.</h2></div><div className="comparison-key"><Button variant="secondary" loading={explaining} onClick={explainAi}><Sparkles size={15} />Explain with AI</Button><VerifiedLabel /><span>Numbers calculated internally</span></div></div>
         <div className="recovery-cards">{plans.map((plan) => {
           const recommended = plan.type === recommendedType
           const icon = plan.type === 'FASTEST' ? Clock3 : plan.type === 'CHEAPEST' ? Banknote : Shuffle

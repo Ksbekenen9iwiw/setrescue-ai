@@ -16,6 +16,7 @@ from app.models import AICache, AISetting, AIUsageLog
 
 EXTRACTION_SYSTEM_PROMPT = "You extract film-production readiness facts into strict JSON. Never schedule or calculate costs."
 READINESS_SYSTEM_PROMPT = "You write concise production-readiness briefings from structured findings. Never schedule or calculate costs."
+RECOVERY_SYSTEM_PROMPT = "You are a production-recovery advisor. You compare solver-generated plans and write concise, factual trade-off briefings. Never calculate costs or schedule."
 
 
 class DetectedRequirement(BaseModel):
@@ -55,6 +56,17 @@ class ReadinessReview(BaseModel):
     summary: str = Field(min_length=1, max_length=2000)
     top_risks: list[ReadinessRisk] = Field(default_factory=list, max_length=10)
     next_actions: list[str] = Field(default_factory=list, max_length=10)
+
+
+class PlanNarrative(BaseModel):
+    plan_type: str = Field(pattern=r"^(FASTEST|CHEAPEST|MINIMUM_CHANGE)$")
+    explanation: str = Field(min_length=1, max_length=1200)
+
+
+class RecoveryReview(BaseModel):
+    recommendation: str = Field(pattern=r"^(FASTEST|CHEAPEST|MINIMUM_CHANGE)$")
+    recommendation_reason: str = Field(min_length=1, max_length=800)
+    narratives: list[PlanNarrative] = Field(default_factory=list, max_length=3)
 
 
 def _hash(value: str) -> str:
@@ -196,6 +208,20 @@ def _readiness_prompt(context_json: str, input_text: str) -> str:
 
 def call_readiness_review(db: Session, operation: str, input_text: str, context: dict[str, Any]) -> tuple[ReadinessReview, bool, int]:
     return _request_structured(db, operation, input_text, context, ReadinessReview, READINESS_SYSTEM_PROMPT, _readiness_prompt)
+
+
+def _recovery_prompt(context_json: str, input_text: str) -> str:
+    return (
+        "Compare the recovery plans below and recommend one. Return JSON only with the exact shape: "
+        '{"recommendation":"FASTEST|CHEAPEST|MINIMUM_CHANGE","recommendation_reason":"...","narratives":[{"plan_type":"FASTEST|CHEAPEST|MINIMUM_CHANGE","explanation":"..."}]}. '
+        "Write one narrative per plan explaining its trade-offs against the others. Be concise and factual; never invent scenes, numbers, or costs. "
+        "The recommendation is advisory and never overrides deterministic scores or approval validation.\n"
+        f"Known context: {context_json}\nPlans:\n{input_text[:100_000]}"
+    )
+
+
+def call_recovery_explanations(db: Session, operation: str, input_text: str, context: dict[str, Any]) -> tuple[RecoveryReview, bool, int]:
+    return _request_structured(db, operation, input_text, context, RecoveryReview, RECOVERY_SYSTEM_PROMPT, _recovery_prompt)
 
 
 def test_connection(setting: AISetting) -> dict[str, Any]:

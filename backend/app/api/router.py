@@ -28,7 +28,7 @@ from app.schemas import (
     NotificationSend, ProjectCreate, ProjectUpdate, RecoveryGenerate, RequirementCreate,
     RequirementDecision, ResourceCreate, SceneCreate, SceneUpdate, ShotCreate, WeatherManualCreate,
 )
-from app.services.ai import call_readiness_review, call_structured_analysis, test_connection
+from app.services.ai import call_readiness_review, call_recovery_explanations, call_structured_analysis, test_connection
 from app.services.demo import load_realistic_demo
 from app.services.documents import save_document
 from app.services.notifications import calculate_crew_impact, create_previews, send_notifications
@@ -591,6 +591,68 @@ def recover(incident_id: str, payload: RecoveryGenerate, db: Session = Depends(g
     recommended = ordering[payload.priority]
     rows = sorted((_plan_payload(db, plan) for plan in plans), key=lambda item: (item["type"] != recommended, item["score"]))
     return success({"priority": payload.priority, "recommended_type": recommended, "plans": rows})
+
+
+@router.post("/incidents/{incident_id}/recovery/ai-explain")
+def ai_explain_recovery(incident_id: str, db: Session = Depends(get_db)) -> dict:
+    incident = db.get(Incident, incident_id)
+    if not incident:
+        raise not_found("Incident")
+    order = {"FASTEST": 0, "CHEAPEST": 1, "MINIMUM_CHANGE": 2}
+    plans = sorted(
+        db.scalars(select(RecoveryPlan).where(
+            RecoveryPlan.incident_id == incident_id, RecoveryPlan.status != "APPROVED",
+        )).all(),
+        key=lambda plan: order.get(plan.type, 9),
+    )[:3]
+    if not plans:
+        raise AppError(409, "RECOVERY_NOT_GENERATED", "Generate recovery plans before requesting an AI explanation.")
+    rows = [_plan_payload(db, plan) for plan in plans]
+    input_text = json.dumps({
+        "incident": {
+            "title": incident.title, "category": incident.category,
+            "description": incident.description, "estimated_duration_minutes": incident.estimated_duration_minutes,
+        },
+        "plans": [
+            {
+                "type": row["type"], "status": row["status"],
+                "estimated_delay_minutes": row["estimated_delay_minutes"],
+                "estimated_extra_cost": row["estimated_extra_cost"],
+                "moved_scene_count": row["moved_scene_count"],
+                "unresolved_scene_count": row["unresolved_scene_count"],
+                "moved_scenes": [
+                    {"scene": item["scene_number"], "title": item["scene_title"], "reason": item["reason"]}
+                    for item in row["items"] if item["action"] == "MOVE"
+                ],
+                "unresolved_scenes": [
+                    {"scene": item["scene_number"], "title": item["scene_title"]}
+                    for item in row["items"] if item["action"] == "UNRESOLVED"
+                ],
+                "cost_breakdown": [
+                    {"category": cost["category"], "amount": cost["amount"], "description": cost["description"]}
+                    for cost in row["cost_breakdown"]
+                ],
+            }
+            for row in rows
+        ],
+    }, sort_keys=True, separators=(",", ":"))
+    review, cache_hit, tokens = call_recovery_explanations(
+        db, f"{incident_id}:RECOVERY_EXPLAIN", input_text, {"incident_id": incident_id}
+    )
+    narratives = {narrative.plan_type: narrative.explanation for narrative in review.narratives}
+    for plan in plans:
+        narrative = narratives.get(plan.type)
+        if plan.type == review.recommendation:
+            plan.ai_explanation = f"{narrative} Recommended: {review.recommendation_reason}" if narrative else review.recommendation_reason
+        elif narrative:
+            plan.ai_explanation = narrative
+    db.commit()
+    return success({
+        "plans": [_plan_payload(db, plan) for plan in plans],
+        "recommendation": review.recommendation,
+        "cache_hit": cache_hit,
+        "token_usage": tokens,
+    })
 
 
 @router.get("/projects/{project_id}/recovery")
