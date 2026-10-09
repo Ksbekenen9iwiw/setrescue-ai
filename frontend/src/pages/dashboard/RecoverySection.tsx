@@ -21,6 +21,7 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
   const [detailPlan, setDetailPlan] = useState<RecoveryPlan | null>(null)
   const [confirmPlan, setConfirmPlan] = useState<RecoveryPlan | null>(null)
   const [explaining, setExplaining] = useState(false)
+  const [aiRec, setAiRec] = useState<{ recommendation: string; reason: string } | null>(null)
   const { data: incidents, loading: loadingIncidents, error, reload: reloadIncidents } = useLoad(
     () => activeProjectId ? api<Incident[]>(`/projects/${activeProjectId}/incidents`) : Promise.reject(new Error('Select a project first.')),
     [activeProjectId],
@@ -50,6 +51,7 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
     try {
       const result = await post<Generated>(`/incidents/${selectedIncident}/recovery/generate`, { priority })
       setPlans(result.plans as RecoveryPlan[])
+      setAiRec(null)
       toast('Three deterministic recovery objectives evaluated.', 'success')
       await reloadPlans()
     } catch (caught) { toast(caught instanceof Error ? caught.message : 'Recovery generation failed.', 'error') }
@@ -60,8 +62,9 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
     if (!selectedIncident) return
     setExplaining(true)
     try {
-      const result = await post<{ plans: RecoveryPlan[]; recommendation: string; cache_hit: boolean }>(`/incidents/${selectedIncident}/recovery/ai-explain`)
+      const result = await post<{ plans: RecoveryPlan[]; recommendation: string; recommendation_reason: string; cache_hit: boolean }>(`/incidents/${selectedIncident}/recovery/ai-explain`)
       setPlans(result.plans)
+      setAiRec({ recommendation: result.recommendation, reason: result.recommendation_reason })
       toast(result.cache_hit ? 'AI explanations loaded from cache.' : 'AI trade-off explanations ready.', 'success')
       await reloadPlans()
     } catch (caught) { toast(caught instanceof Error ? caught.message : 'AI explanation failed.', 'error') }
@@ -104,6 +107,7 @@ export function RecoverySection({ seedIncidentId, onGo }: { seedIncidentId: stri
             <div className="plan-title"><span><Icon size={21} /></span><div><small>OBJECTIVE</small><h2>{plan.type.replace('_', ' ')}</h2></div><Badge tone={plan.status === 'VALID' ? 'success' : plan.status === 'APPROVED' ? 'info' : 'warning'}>{plan.status}</Badge></div>
             <div className="plan-finish"><span>Estimated finish</span><strong>{formatDateTime(plan.estimated_finish_time)}</strong><small>{plan.estimated_delay_minutes} min delay vs baseline</small></div>
             <div className="plan-metrics"><div><span>Extra cost</span><strong>{currency(plan.estimated_extra_cost, activeProject?.currency)}</strong></div><div><span>Scenes moved</span><strong>{plan.moved_scene_count}</strong></div><div><span>Unresolved</span><strong className={plan.unresolved_scene_count ? 'danger-text' : ''}>{plan.unresolved_scene_count}</strong></div></div>
+            {aiRec?.recommendation === plan.type && <div className="ai-advisory"><Badge tone="ai">AI ADVISORY</Badge><p>{aiRec.reason}</p></div>}
             <div className="plan-explanation"><Sparkles size={15} /><p>{plan.ai_explanation}</p></div>
             {plan.unresolved_scene_count > 0 && <div className="draft-warning"><TriangleAlert size={16} /><span>Hard constraints leave unresolved scenes. Approval is disabled.</span></div>}
             <div className="plan-actions"><Button variant="secondary" onClick={() => setDetailPlan(plan)}><GitCompareArrows size={15} />Inspect plan</Button><Button disabled={plan.status !== 'VALID' || plan.unresolved_scene_count > 0} onClick={() => setConfirmPlan(plan)}><CheckCircle2 size={15} />Approve</Button></div>

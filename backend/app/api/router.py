@@ -642,14 +642,13 @@ def ai_explain_recovery(incident_id: str, db: Session = Depends(get_db)) -> dict
     narratives = {narrative.plan_type: narrative.explanation for narrative in review.narratives}
     for plan in plans:
         narrative = narratives.get(plan.type)
-        if plan.type == review.recommendation:
-            plan.ai_explanation = f"{narrative} Recommended: {review.recommendation_reason}" if narrative else review.recommendation_reason
-        elif narrative:
+        if narrative:
             plan.ai_explanation = narrative
     db.commit()
     return success({
         "plans": [_plan_payload(db, plan) for plan in plans],
         "recommendation": review.recommendation,
+        "recommendation_reason": review.recommendation_reason,
         "cache_hit": cache_hit,
         "token_usage": tokens,
     })
