@@ -133,7 +133,7 @@ export function ProductionDataPage() {
           <h1>Production Data</h1>
           <p>Upload documents, verify structured scenes and resources, and run deterministic readiness checks.</p>
         </div>
-        {/* {activeTab !== 'readiness' && <div className="page-actions"><Button variant="secondary" loading={analyzing} disabled={!data.documents.length} onClick={analyze}><BrainCircuit size={16} />Analyze with AI</Button></div>} */}
+        {activeTab !== 'readiness' && <div className="page-actions"><Button variant="secondary" loading={analyzing} disabled={!data.documents.length} onClick={analyze}><BrainCircuit size={16} />Analyze with AI</Button></div>}
       </div>
       <div className="tabbar">
         <button className={activeTab === 'documents' ? 'active' : ''} onClick={() => setActiveTab('documents')}><FileText size={16} />Documents <span>{data.documents.length}</span></button>
